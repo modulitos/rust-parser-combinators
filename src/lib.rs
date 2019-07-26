@@ -143,7 +143,6 @@ fn right_combinator() {
     assert_eq!(Err("!oops"), tag_opener.parse("<!oops"));
 }
 
-
 // We've dealt with this already in our identifier parser, but it was
 // all done manually there. Not surprisingly, the code for the general
 // idea isn't all that different.
@@ -169,7 +168,6 @@ where
         Ok((input, result))
     }
 }
-
 
 fn zero_or_more<'a, P, A>(parser: P) -> impl Parser<'a, Vec<A>>
 where
@@ -203,4 +201,72 @@ fn zero_or_more_combinator() {
     assert_eq!(Ok(("ahah", vec![])), parser.parse("ahah"));
     assert_eq!(Ok(("", vec![])), parser.parse(""));
     assert_eq!(Ok(("foobar", vec![])), parser.parse("foobar"));
+}
+
+// handling whitespace:
+
+// this is similar to our match_literal parser, but returns the char instead of ():
+fn any_char(input: &str) -> ParseResult<char> {
+    match input.chars().next() {
+        Some(next) => Ok((&input[next.len_utf8()..], next)),
+        _ => Err(input),
+    }
+}
+
+// predicate combinator - takes a parser and a predicate function:
+fn pred<'a, P, A, F>(parser: P, predicate: F) -> impl Parser<'a, A>
+where
+    P: Parser<'a, A>,
+    F: Fn(&A) -> bool,
+{
+    move |input| {
+        if let Ok((next_input, value)) = parser.parse(input) {
+            if predicate(&value) {
+                return Ok((next_input, value));
+            }
+        }
+        Err(input)
+    }
+}
+
+#[test]
+fn predicate_combinator() {
+    let parser = pred(any_char, |c| *c == 'o');
+    assert_eq!(Ok(("mg", 'o')), parser.parse("omg"));
+    assert_eq!(Err("lol"), parser.parse("lol"));
+}
+
+fn whitespace_char<'a>() -> impl Parser<'a, char> {
+    pred(any_char, |c| c.is_whitespace())
+}
+
+fn space1<'a>() -> impl Parser<'a, Vec<char>> {
+    one_or_more(whitespace_char())
+}
+
+fn space0<'a>() -> impl Parser<'a, Vec<char>> {
+    zero_or_more(whitespace_char())
+}
+
+fn quoted_string<'a>() -> impl Parser<'a, String> {
+    map(
+        right(
+            match_literal("\""),
+            left(
+                zero_or_more(pred(any_char, |c| *c != '"')),
+                match_literal("\""),
+            ),
+        ),
+        // zero_or_more returns a Vec<A>, and for any_char, A is char.
+        // So we have to map Vec<char> to String
+        |chars| chars.into_iter().collect(),
+    )
+}
+
+#[test]
+fn quoted_string_parser() {
+    assert_eq!(
+        Ok(("", "Hello Joe!".to_string())),
+        quoted_string().parse("\"Hello Joe!\"")
+    );
 }
