@@ -5,9 +5,23 @@ struct Element {
     children: Vec<Element>,
 }
 
-fn match_literal(expected: &'static str) -> impl Fn(&str) -> Result<(&str, ()), &str> {
-    // fn match_literal<'a>(expected: & str) -> impl Parser<'a, ()> {
-    move |input| match input.get(0..expected.len()) {
+type ParseResult<'a, Output> = Result<(&'a str, Output), &'a str>;
+
+trait Parser<'a, Output> {
+    fn parse(&self, input: &'a str) -> ParseResult<'a, Output>;
+}
+
+impl<'a, F, Output> Parser<'a, Output> for F
+where
+    F: Fn(&'a str) -> ParseResult<Output>,
+{
+    fn parse(&self, input: &'a str) -> ParseResult<'a, Output> {
+        self(input)
+    }
+}
+
+fn match_literal<'a>(expected: &'static str) -> impl Parser<'a, ()> {
+    move |input: &'a str| match input.get(0..expected.len()) {
         // we ask the standard library for the length of 'a' in UTF-8
         // before slicing - it's 1, but never, ever presume about the
         // Unicode monster.
@@ -19,16 +33,15 @@ fn match_literal(expected: &'static str) -> impl Fn(&str) -> Result<(&str, ()), 
 #[test]
 fn literal_parser() {
     let parse_joe = match_literal("Hello Joe!");
-    assert_eq!(Ok(("", ())), parse_joe("Hello Joe!"));
+    assert_eq!(Ok(("", ())), parse_joe.parse("Hello Joe!"));
     assert_eq!(
         Ok((" Hello Robert!", ())),
-        parse_joe("Hello Joe! Hello Robert!")
+        parse_joe.parse("Hello Joe! Hello Robert!")
     );
-    assert_eq!(Err("Hello Mike!"), parse_joe("Hello Mike!"));
+    assert_eq!(Err("Hello Mike!"), parse_joe.parse("Hello Mike!"));
 }
 
-// fn identifier(input: &str) -> Result<(&str, String), &str> {
-fn identifier(input: &str) -> Result<(&str, String), &str> {
+fn identifier(input: &str) -> ParseResult<String> {
     let mut matched = String::new();
     let mut chars = input.chars();
 
@@ -92,7 +105,6 @@ fn pair_combinator() {
 
 fn map<'a, P, F, A, B>(parser: P, map_fn: F) -> impl Parser<'a, B>
 where
-    // P: Fn(&str) -> Result<(&str, A), &str>,
     P: Parser<'a, A>,
     F: Fn(A) -> B,
 {
@@ -104,17 +116,29 @@ where
     }
 }
 
-type ParseResult<'a, Output> = Result<(&'a str, Output), &'a str>;
-
-trait Parser<'a, Output> {
-    fn parse(&self, input: &'a str) -> ParseResult<'a, Output>;
+fn left<'a, P1, P2, R1, R2>(parser1: P1, parser2: P2) -> impl Parser<'a, R1>
+where
+    P1: Parser<'a, R1>,
+    P2: Parser<'a, R2>,
+{
+    map(pair(parser1, parser2), |(left, _right)| left)
 }
 
-impl<'a, F, Output> Parser<'a, Output> for F
+fn right<'a, P1, P2, R1, R2>(parser1: P1, parser2: P2) -> impl Parser<'a, R2>
 where
-    F: Fn(&'a str) -> ParseResult<Output>,
+    P1: Parser<'a, R1>,
+    P2: Parser<'a, R2>,
 {
-    fn parse(&self, input: &'a str) -> ParseResult<'a, Output> {
-        self(input)
-    }
+    map(pair(parser1, parser2), |(_left, right)| right)
+}
+
+#[test]
+fn right_combinator() {
+    let tag_opener = right(match_literal("<"), identifier);
+    assert_eq!(
+        Ok(("/>", "my-first-element".to_string())),
+        tag_opener.parse("<my-first-element/>")
+    );
+    assert_eq!(Err("oops"), tag_opener.parse("oops"));
+    assert_eq!(Err("!oops"), tag_opener.parse("<!oops"));
 }
