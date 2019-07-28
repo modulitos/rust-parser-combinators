@@ -367,3 +367,35 @@ fn single_element_parser() {
         single_element().parse("<div class=\"float\"/>")
     );
 }
+
+fn open_element<'a>() -> impl Parser<'a, Element> {
+    left(element_start(), match_literal(">")).map(|(name, attributes)| Element {
+        name,
+        attributes,
+        children: vec![],
+    })
+}
+
+fn either<'a, P1, P2, A>(parser1: P1, parser2: P2) -> impl Parser<'a, A>
+where
+    P1: Parser<'a, A>,
+    P2: Parser<'a, A>,
+{
+    move |input| match parser1.parse(input) {
+        ok_result @ Ok(_) => ok_result, // @ avoids unboxing then boxing in Ok() type
+        Err(_) => parser2.parse(input),
+    }
+}
+
+fn element<'a>() -> impl Parser<'a, Element> {
+    // TODO: open_element should deal with parents - update
+    // open_element to parse the parents children as well
+    either(single_element(), open_element())
+}
+
+fn close_element<'a>(expected_name: &'a str) -> impl Parser<'a, String> {
+    right(
+        match_literal("</"),
+        left(identifier, match_literal(">")).pred(move |name| name == expected_name),
+    )
+}
