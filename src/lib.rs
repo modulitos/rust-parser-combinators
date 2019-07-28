@@ -7,10 +7,44 @@ struct Element {
     children: Vec<Element>,
 }
 
+struct BoxedParser<'a, Output> {
+    parser: Box<dyn Parser<'a, Output> + 'a>,
+}
+
+impl<'a, Output> BoxedParser<'a, Output> {
+    fn new<P>(parser: P) -> Self
+    where
+        P: Parser<'a, Output> + 'a,
+    {
+        BoxedParser {
+            parser: Box::new(parser),
+        }
+    }
+}
+
 type ParseResult<'a, Output> = Result<(&'a str, Output), &'a str>;
 
 trait Parser<'a, Output> {
     fn parse(&self, input: &'a str) -> ParseResult<'a, Output>;
+
+    fn map<F, NewOutput>(self, map_fn: F) -> BoxedParser<'a, NewOutput>
+    where
+        Self: Sized + 'a,
+        Output: 'a,
+        NewOutput: 'a,
+        F: Fn(Output) -> NewOutput + 'a,
+    {
+        BoxedParser::new(map(self, map_fn))
+    }
+
+    fn pred<F>(self, pred_fn: F) -> BoxedParser<'a, Output>
+    where
+        Self: Sized + 'a,
+        Output: 'a,
+        F: Fn(&Output) -> bool + 'a,
+    {
+        BoxedParser::new(pred(self, pred_fn))
+    }
 }
 
 impl<'a, F, Output> Parser<'a, Output> for F
@@ -19,6 +53,12 @@ where
 {
     fn parse(&self, input: &'a str) -> ParseResult<'a, Output> {
         self(input)
+    }
+}
+
+impl<'a, Output> Parser<'a, Output> for BoxedParser<'a, Output> {
+    fn parse(&self, input: &'a str) -> ParseResult<'a, Output> {
+        self.parser.parse(input)
     }
 }
 
@@ -250,15 +290,18 @@ fn space0<'a>() -> impl Parser<'a, Vec<char>> {
     zero_or_more(whitespace_char())
 }
 
+// By adding the .map method to Parser, it's now more obvious at first
+// glance that the .map() is being called on the result of the
+// right().
 fn quoted_string<'a>() -> impl Parser<'a, String> {
-    map(
-        right(
+    right(
+        match_literal("\""),
+        left(
+            zero_or_more(any_char.pred(|c| *c != '"')),
             match_literal("\""),
-            left(
-                zero_or_more(pred(any_char, |c| *c != '"')),
-                match_literal("\""),
-            ),
         ),
+    )
+    .map(
         // zero_or_more returns a Vec<A>, and for any_char, A is char.
         // So we have to map Vec<char> to String
         |chars| chars.into_iter().collect(),
@@ -294,3 +337,37 @@ fn attribute_parser() {
         attributes().parse(" one=\"1\" two=\"2\"")
     );
 }
+
+// The recursive types have caught up to use, making this code require
+// a lot of memory and time to compile. We can solve this problem with
+// another layer of indirection - using Box'ed types.
+
+// fn element_start<'a>() -> impl Parser<'a, (String, Vec<(String, String)>)> {
+//     right(match_literal("<"), pair(identifier, attributes()))
+// }
+
+// fn single_element<'a>() -> impl Parser<'a, Element> {
+//     map(
+//         left(element_start(), match_literal("/>")),
+//         |(name, attributes)| Element {
+//             name,
+//             attributes,
+//             children: vec![],
+//         },
+//     )
+// }
+
+// #[test]
+// fn single_element_parser() {
+//     assert_eq!(
+//         Ok((
+//             "",
+//             Element {
+//                 name: "div".to_string(),
+//                 attributes: vec![("class".to_string(), "float".to_string())],
+//                 children: vec![]
+//             }
+//         )),
+//         single_element().parse("<div class=\"float\"/>")
+//     );
+// }
