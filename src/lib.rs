@@ -1,5 +1,3 @@
-#![type_length_limit = "1137931"]
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Element {
     name: String,
@@ -27,6 +25,10 @@ type ParseResult<'a, Output> = Result<(&'a str, Output), &'a str>;
 trait Parser<'a, Output> {
     fn parse(&self, input: &'a str) -> ParseResult<'a, Output>;
 
+    // Moving the boxed parser to the heap and having to deref a
+    // pointer to get to it, can cost us several precious nanoseconds.
+    // So we might actually want to hold off on boxing everything.
+    // It's enough to just box some of the more popular combinators.
     fn map<F, NewOutput>(self, map_fn: F) -> BoxedParser<'a, NewOutput>
     where
         Self: Sized + 'a,
@@ -273,7 +275,8 @@ where
 
 #[test]
 fn predicate_combinator() {
-    let parser = pred(any_char, |c| *c == 'o');
+    // let parser = pred(any_char, |c| *c == 'o');  // unboxed
+    let parser = any_char.pred(|c| *c == 'o'); // boxed
     assert_eq!(Ok(("mg", 'o')), parser.parse("omg"));
     assert_eq!(Err("lol"), parser.parse("lol"));
 }
@@ -338,36 +341,29 @@ fn attribute_parser() {
     );
 }
 
-// The recursive types have caught up to use, making this code require
-// a lot of memory and time to compile. We can solve this problem with
-// another layer of indirection - using Box'ed types.
+fn element_start<'a>() -> impl Parser<'a, (String, Vec<(String, String)>)> {
+    right(match_literal("<"), pair(identifier, attributes()))
+}
 
-// fn element_start<'a>() -> impl Parser<'a, (String, Vec<(String, String)>)> {
-//     right(match_literal("<"), pair(identifier, attributes()))
-// }
+fn single_element<'a>() -> impl Parser<'a, Element> {
+    left(element_start(), match_literal("/>")).map(|(name, attributes)| Element {
+        name,
+        attributes,
+        children: vec![],
+    })
+}
 
-// fn single_element<'a>() -> impl Parser<'a, Element> {
-//     map(
-//         left(element_start(), match_literal("/>")),
-//         |(name, attributes)| Element {
-//             name,
-//             attributes,
-//             children: vec![],
-//         },
-//     )
-// }
-
-// #[test]
-// fn single_element_parser() {
-//     assert_eq!(
-//         Ok((
-//             "",
-//             Element {
-//                 name: "div".to_string(),
-//                 attributes: vec![("class".to_string(), "float".to_string())],
-//                 children: vec![]
-//             }
-//         )),
-//         single_element().parse("<div class=\"float\"/>")
-//     );
-// }
+#[test]
+fn single_element_parser() {
+    assert_eq!(
+        Ok((
+            "",
+            Element {
+                name: "div".to_string(),
+                attributes: vec![("class".to_string(), "float".to_string())],
+                children: vec![]
+            }
+        )),
+        single_element().parse("<div class=\"float\"/>")
+    );
+}
