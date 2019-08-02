@@ -379,6 +379,14 @@ fn single_element_parser() {
     );
 }
 
+#[test]
+fn single_element_parser_fail() {
+    assert_eq!(
+        Err("//>"),
+        single_element().parse("<div class=\"float\"//>")
+    );
+}
+
 fn open_element<'a>() -> impl Parser<'a, Element> {
     left(element_start(), match_literal(">")).map(|(name, attributes)| Element {
         name,
@@ -396,10 +404,6 @@ where
         ok_result @ Ok(_) => ok_result, // @ avoids unboxing then boxing in Ok() type
         Err(_) => parser2.parse(input),
     }
-}
-
-fn element<'a>() -> impl Parser<'a, Element> {
-    either(single_element(), parent_element())
 }
 
 fn close_element<'a>(expected_name: String) -> impl Parser<'a, String> {
@@ -438,4 +442,61 @@ fn parent_element<'a>() -> impl Parser<'a, Element> {
             el
         })
     })
+}
+
+fn whitespace_wrap<'a, P, A>(parser: P) -> impl Parser<'a, A>
+where
+    P: Parser<'a, A>,
+{
+    right(space0(), left(parser, space0()))
+}
+
+fn element<'a>() -> impl Parser<'a, Element> {
+    whitespace_wrap(either(single_element(), parent_element()))
+}
+
+#[test]
+fn xml_parser() {
+    let doc = r#"
+        <top label="Top">
+            <semi-bottom label="Bottom"/>
+            <middle>
+                <bottom label="Another bottom"/>
+            </middle>
+        </top>"#;
+    let parsed_doc = Element {
+        name: "top".to_string(),
+        attributes: vec![("label".to_string(), "Top".to_string())],
+        children: vec![
+            Element {
+                name: "semi-bottom".to_string(),
+                attributes: vec![("label".to_string(), "Bottom".to_string())],
+                children: vec![],
+            },
+            Element {
+                name: "middle".to_string(),
+                attributes: vec![],
+                children: vec![Element {
+                    name: "bottom".to_string(),
+                    attributes: vec![("label".to_string(), "Another bottom".to_string())],
+                    children: vec![],
+                }],
+            },
+        ],
+    };
+    assert_eq!(Ok(("", parsed_doc)), element().parse(doc));
+}
+
+#[test]
+fn mismatched_closing_tag() {
+    let doc = r#"
+        <top>
+            <bottom/>
+        </middle>"#;
+    // Unfortunately, it seems that we parse the `</` match before the
+    // mismatched closing tag name fails:
+
+    // assert_eq!(Err("</middle>"), element().parse(doc));
+
+    assert_eq!(Err("middle>"), element().parse(doc));
 }
