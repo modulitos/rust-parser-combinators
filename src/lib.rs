@@ -47,6 +47,17 @@ trait Parser<'a, Output> {
     {
         BoxedParser::new(pred(self, pred_fn))
     }
+
+    fn and_then<F, NextParser, NewOutput>(self, f: F) -> BoxedParser<'a, NewOutput>
+    where
+        Self: Sized + 'a,
+        Output: 'a,
+        NewOutput: 'a,
+        NextParser: Parser<'a, NewOutput> + 'a,
+        F: Fn(Output) -> NextParser + 'a,
+    {
+        BoxedParser::new(and_then(self, f))
+    }
 }
 
 impl<'a, F, Output> Parser<'a, Output> for F
@@ -388,14 +399,43 @@ where
 }
 
 fn element<'a>() -> impl Parser<'a, Element> {
-    // TODO: open_element should deal with parents - update
-    // open_element to parse the parents children as well
-    either(single_element(), open_element())
+    either(single_element(), parent_element())
 }
 
-fn close_element<'a>(expected_name: &'a str) -> impl Parser<'a, String> {
+fn close_element<'a>(expected_name: String) -> impl Parser<'a, String> {
     right(
         match_literal("</"),
-        left(identifier, match_literal(">")).pred(move |name| name == expected_name),
+        left(identifier, match_literal(">")).pred(move |name| name == &expected_name),
     )
+}
+
+// a bit like pair, except instead of just collecting both results in
+// a tuple, we thread them through a function. This allows us to take
+// the results of the first parser, and apply it to the second parser.
+
+// It's similar to how and_then works with Results and Options, except
+// it's a bit easier to follow because Results and Options don't
+// really do anything, they're just things that hold some data (or
+// not, as the case may be).
+
+fn and_then<'a, A, P, B, NextP, F>(parser: P, f: F) -> impl Parser<'a, B>
+where
+    P: Parser<'a, A>,
+    NextP: Parser<'a, B>,
+    F: Fn(A) -> NextP,
+{
+    move |input| match parser.parse(input) {
+        Ok((next_input, result)) => f(result).parse(next_input),
+        Err(err) => Err(err),
+    }
+}
+
+fn parent_element<'a>() -> impl Parser<'a, Element> {
+    open_element().and_then(|el| {
+        left(zero_or_more(element()), close_element(el.clone().name)).map(move |children| {
+            let mut el = el.clone();
+            el.children = children;
+            el
+        })
+    })
 }
